@@ -346,6 +346,33 @@ describe("access stats", () => {
     const freshCheck = await fetch(createRequest("HEAD", `/v2/${name}/manifests/fresh`, null));
     expect(freshCheck.status).toBe(200);
   });
+
+  test("_admin/summary returns per-repository rollup", async () => {
+    const name = "access-stats-summary";
+    const manifest = await generateManifest(name);
+    await createManifest(name, manifest, "latest");
+    await fetch(createRequest("GET", `/v2/${name}/manifests/latest`, null, {
+      Accept: "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json",
+    }));
+
+    const res = await fetch(createRequest("GET", `/v2/_admin/summary`, null));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      repositories: { name: string; digestCount: number; totalPulls: number; lastAccess: number }[];
+    };
+    const repo = body.repositories.find((r) => r.name === name);
+    expect(repo).toBeTruthy();
+    expect(repo!.digestCount).toBeGreaterThanOrEqual(1);
+    expect(repo!.totalPulls).toBeGreaterThanOrEqual(1);
+  });
+
+  test("admin page requires credentials", async () => {
+    const res = await fetchUnauth(createRequest("GET", `/admin`, null));
+    expect(res.status).toBe(401);
+    const resAuth = await fetch(createRequest("GET", `/admin`, null));
+    expect(resAuth.status).toBe(200);
+    expect(resAuth.headers.get("Content-Type")).toContain("text/html");
+  });
 });
 
 function getImageManifestV2(schema: ManifestSchema) {

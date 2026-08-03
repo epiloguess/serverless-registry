@@ -69,3 +69,33 @@ export async function deleteAccessStats(db: D1Database, name: string, digests: s
     console.error(`Error deleting access stats: ${errorString(err)}`);
   }
 }
+
+export type RepositorySummary = {
+  name: string;
+  digestCount: number;
+  totalPulls: number;
+  lastAccess: number;
+  lastAccessHuman: string;
+};
+
+// Per-repository rollup across all tracked digests, for the dashboard.
+export async function summarizeRepositories(db: D1Database): Promise<RepositorySummary[]> {
+  const rows = await db
+    .prepare(
+      `SELECT name,
+              COUNT(digest) AS digest_count,
+              SUM(count) AS total_pulls,
+              MAX(last_access) AS last_access
+       FROM access_stats
+       GROUP BY name
+       ORDER BY total_pulls DESC`,
+    )
+    .all<{ name: string; digest_count: number; total_pulls: number; last_access: number }>();
+  return rows.results.map((row) => ({
+    name: row.name,
+    digestCount: row.digest_count,
+    totalPulls: row.total_pulls,
+    lastAccess: row.last_access,
+    lastAccessHuman: new Date(row.last_access).toISOString(),
+  }));
+}

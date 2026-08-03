@@ -8,6 +8,7 @@ import v2Router from "./src/router";
 import { authenticationMethodFromEnv } from "./src/authentication-method";
 import { Registry } from "./src/registry/registry";
 import { R2Registry } from "./src/registry/r2";
+import { adminHandler } from "./src/admin";
 
 // A full compatibility mode means that the r2 registry will try its best to
 // help the client on the layer push. See how we let the client push layers with chunked uploads for more information.
@@ -31,6 +32,10 @@ export interface Env {
 }
 
 const router = Router();
+
+// Admin dashboard. Auth is handled below for all routes, so /admin requires
+// valid credentials (anonymous pull whitelist does not include /admin).
+router.get("/admin", () => adminHandler());
 
 /**
  * V2 Api

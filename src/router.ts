@@ -19,7 +19,7 @@ import {
 } from "./registry/registry";
 import { RegistryHTTPClient } from "./registry/http";
 import { ociImageIndexContentType } from "./registry/r2";
-import { deleteAccessStats, listHotResources, listStaleManifests } from "./access-stats";
+import { deleteAccessStats, listHotResources, listStaleManifests, summarizeRepositories } from "./access-stats";
 
 const maxReferrersListLimit = 1000;
 const isOpaqueReferrersCursor = (cursor: string) => cursor.startsWith("/v2/");
@@ -75,6 +75,17 @@ v2Router.get("/_admin/hot", async (req, env: Env) => {
   const limit = Math.max(0, Math.min(1000, parseInt(limitStr.toString(), 10) || 100));
   const stats = await listHotResources(env.STATS, name, limit);
   return new Response(JSON.stringify({ name, stats }), { headers: jsonHeaders() });
+});
+
+v2Router.get("/_admin/summary", async (_req, env: Env) => {
+  if (!env.STATS) {
+    return new Response(JSON.stringify({ error: "D1 STATS binding is not configured" }), {
+      status: 500,
+      headers: jsonHeaders(),
+    });
+  }
+  const repositories = await summarizeRepositories(env.STATS);
+  return new Response(JSON.stringify({ repositories }), { headers: jsonHeaders() });
 });
 
 v2Router.post("/_admin/prune", async (req, env: Env) => {
