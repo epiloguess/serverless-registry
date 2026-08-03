@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { SHA256_PREFIX_LEN, getSHA256 } from "../src/user";
 import { TagsList } from "../src/router";
 import { Env } from "..";
@@ -257,6 +257,94 @@ describe("v2", () => {
     } finally {
       bindings.ALLOW_ANONYMOUS_PULL = previous;
     }
+  });
+});
+
+describe("access stats", () => {
+  beforeEach(async () => {
+    const bindings = env as Env;
+    await bindings.STATS!.exec(
+      `CREATE TABLE IF NOT EXISTS access_stats (name TEXT NOT NULL, digest TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 1, last_access INTEGER NOT NULL, PRIMARY KEY (name, digest))`,
+    );
+    await bindings.STATS!.exec(
+      `CREATE INDEX IF NOT EXISTS idx_access_stats_name ON access_stats (name, last_access)`,
+    );
+  });
+
+  test("pulling a manifest records access stats", async () => {
+    const bindings = env as Env;
+    const name = "access-stats-record";
+    const manifest = await generateManifest(name);
+    const { sha256 } = await createManifest(name, manifest, "latest");
+    await fetch(createRequest("GET", `/v2/${name}/manifests/latest`, null, {
+      Accept: "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json",
+    }));
+    const row = await bindings.STATS!.prepare("SELECT * FROM access_stats WHERE name = ?1")
+      .bind(name)
+      .first<{ name: string; digest: string; count: number; last_access: number }>();
+    expect(row).not.toBeNull();
+    expect(row!.digest).toBe(sha256);
+    expect(row!.count).toBeGreaterThanOrEqual(1);
+  });
+
+  test("_admin/hot returns hot resources ordered by count", async () => {
+    const name = "access-stats-hot";
+    const manifest = await generateManifest(name);
+    await createManifest(name, manifest, "latest");
+    await fetch(createRequest("GET", `/v2/${name}/manifests/latest`, null, {
+      Accept: "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json",
+    }));
+    await fetch(createRequest("GET", `/v2/${name}/manifests/latest`, null, {
+      Accept: "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json",
+    }));
+    const res = await fetch(createRequest("GET", `/v2/_admin/hot?name=${name}`, null));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { name: string; stats: { digest: string; count: number; lastAccess: number }[] };
+    expect(body.name).toBe(name);
+    expect(body.stats.length).toBeGreaterThanOrEqual(1);
+    expect(body.stats[0].count).toBeGreaterThanOrEqual(2);
+  });
+
+  test("_admin/prune deletes stale manifests and keeps fresh ones", async () => {
+    const bindings = env as Env;
+    const name = "access-stats-prune";
+    const staleManifest = await generateManifest(name);
+    await createManifest(name, staleManifest, "stale");
+    const freshManifest = await generateManifest(name);
+    await createManifest(name, freshManifest, "fresh");
+
+    // Pull the fresh tag only, so fresh gets a recent access record
+    await fetch(createRequest("GET", `/v2/${name}/manifests/fresh`, null, {
+      Accept: "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json",
+    }));
+
+    // Give the stale digest an ancient last_access record
+    const staleDigest = await getSHA256(JSON.stringify(staleManifest));
+    await bindings.STATS!.prepare(
+      "INSERT INTO access_stats (name, digest, count, last_access) VALUES (?1, ?2, 1, 1)",
+    )
+      .bind(name, staleDigest)
+      .run();
+
+    // Ensure the fresh digest has a recent last_access record
+    const freshDigest = await getSHA256(JSON.stringify(freshManifest));
+    await bindings.STATS!.prepare(
+      "UPDATE access_stats SET last_access = ?3 WHERE name = ?1 AND digest = ?2",
+    )
+      .bind(name, freshDigest, Date.now())
+      .run();
+
+    const res = await fetch(createRequest("POST", `/v2/_admin/prune?name=${name}&days=1`, null));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { deleted: string[] };
+    expect(body.deleted).toContain(staleDigest);
+    expect(body.deleted).not.toContain(freshDigest);
+
+    // The stale digest manifest should be gone, fresh should remain
+    const staleCheck = await fetch(createRequest("HEAD", `/v2/${name}/manifests/${staleDigest}`, null));
+    expect(staleCheck.status).toBe(404);
+    const freshCheck = await fetch(createRequest("HEAD", `/v2/${name}/manifests/fresh`, null));
+    expect(freshCheck.status).toBe(200);
   });
 });
 

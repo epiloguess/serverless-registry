@@ -19,6 +19,7 @@ import {
 } from "./registry/registry";
 import { RegistryHTTPClient } from "./registry/http";
 import { ociImageIndexContentType } from "./registry/r2";
+import { deleteAccessStats, listHotResources, listStaleManifests } from "./access-stats";
 
 const maxReferrersListLimit = 1000;
 const isOpaqueReferrersCursor = (cursor: string) => cursor.startsWith("/v2/");
@@ -55,6 +56,58 @@ v2Router.get("/_catalog", async (req, env: Env) => {
       },
     },
   );
+});
+
+v2Router.get("/_admin/hot", async (req, env: Env) => {
+  if (!env.STATS) {
+    return new Response(JSON.stringify({ error: "D1 STATS binding is not configured" }), {
+      status: 500,
+      headers: jsonHeaders(),
+    });
+  }
+  const { name, limit: limitStr = 100 } = req.query;
+  if (typeof name !== "string") {
+    return new Response(JSON.stringify({ error: "missing 'name' query parameter" }), {
+      status: 400,
+      headers: jsonHeaders(),
+    });
+  }
+  const limit = Math.max(0, Math.min(1000, parseInt(limitStr.toString(), 10) || 100));
+  const stats = await listHotResources(env.STATS, name, limit);
+  return new Response(JSON.stringify({ name, stats }), { headers: jsonHeaders() });
+});
+
+v2Router.post("/_admin/prune", async (req, env: Env) => {
+  if (!env.STATS) {
+    return new Response(JSON.stringify({ error: "D1 STATS binding is not configured" }), {
+      status: 500,
+      headers: jsonHeaders(),
+    });
+  }
+  const { name, days: daysStr = 30 } = req.query;
+  if (typeof name !== "string") {
+    return new Response(JSON.stringify({ error: "missing 'name' query parameter" }), {
+      status: 400,
+      headers: jsonHeaders(),
+    });
+  }
+  const days = Math.max(1, parseInt(daysStr.toString(), 10) || 30);
+
+  const staleDigests = await listStaleManifests(env.STATS, name, days);
+  const deleted: string[] = [];
+  for (const digest of staleDigests) {
+    const manifest = await env.REGISTRY.head(`${name}/manifests/${digest}`);
+    if (manifest === null) {
+      continue;
+    }
+    await env.REGISTRY.delete(`${name}/manifests/${digest}`);
+    deleted.push(digest);
+  }
+  await deleteAccessStats(env.STATS, name, staleDigests);
+  if (deleted.length > 0) {
+    await env.REGISTRY_CLIENT.garbageCollection(name, "untagged");
+  }
+  return new Response(JSON.stringify({ name, days, deleted }), { headers: jsonHeaders() });
 });
 
 v2Router.delete("/:name+/manifests/:reference", async (req, env: Env) => {

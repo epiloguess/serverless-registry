@@ -31,6 +31,7 @@ import {
 } from "./registry";
 import { GarbageCollectionMode, GarbageCollector } from "./garbage-collector";
 import { ManifestSchema, manifestSchema } from "../manifest";
+import { recordAccess } from "../access-stats";
 
 export const ociImageIndexContentType = "application/vnd.oci.image.index.v1+json";
 
@@ -617,9 +618,14 @@ export class R2Registry implements Registry {
       };
     }
 
+    const digest = hexToDigest(res.checksums.sha256!);
+    if (this.env.STATS) {
+      await recordAccess(this.env.STATS, name, digest);
+    }
+
     return {
       stream: res.body!,
-      digest: hexToDigest(res.checksums.sha256!),
+      digest,
       size: res.size,
       contentType: res.httpMetadata!.contentType!,
     };
@@ -683,6 +689,10 @@ export class R2Registry implements Registry {
       };
     }
 
+    if (this.env.STATS) {
+      await recordAccess(this.env.STATS, name, hexToDigest(res.checksums.sha256!));
+    }
+
     return {
       digest: hexToDigest(res.checksums.sha256!),
       size: res.size,
@@ -713,6 +723,10 @@ export class R2Registry implements Registry {
         };
       }
       return await this.env.REGISTRY_CLIENT.getLayer(linkName, linkDigest);
+    }
+
+    if (this.env.STATS) {
+      await recordAccess(this.env.STATS, name, hexToDigest(res.checksums.sha256!));
     }
 
     return {

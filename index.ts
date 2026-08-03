@@ -26,6 +26,8 @@ export interface Env {
   REGISTRY_CLIENT: Registry;
   // Set to "true" to allow anonymous pull requests (GET/HEAD) without credentials.
   ALLOW_ANONYMOUS_PULL?: string;
+  // D1 database for access stats (hot resources / stale cleanup).
+  STATS?: D1Database;
 }
 
 const router = Router();
