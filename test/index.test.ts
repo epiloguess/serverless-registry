@@ -366,12 +366,15 @@ describe("access stats", () => {
     expect(repo!.totalPulls).toBeGreaterThanOrEqual(1);
   });
 
-  test("admin page requires credentials", async () => {
+  test("admin page is served and contains login form", async () => {
+    // The admin page is unauthenticated; it embeds a login form and the page
+    // JS sends Basic credentials explicitly on every API request.
     const res = await fetchUnauth(createRequest("GET", `/admin`, null));
-    expect(res.status).toBe(401);
-    const resAuth = await fetch(createRequest("GET", `/admin`, null));
-    expect(resAuth.status).toBe(200);
-    expect(resAuth.headers.get("Content-Type")).toContain("text/html");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toContain("Registry Admin Login");
+    expect(body).toContain("doLogin");
   });
 });
 

@@ -1,6 +1,7 @@
-// Simple admin dashboard for the registry.
-// Served at /admin, protected by the registry's Basic auth (reuses the same
-// credential check as every other registry request).
+// Admin dashboard for the registry.
+// Served at /admin. The page itself is unauthenticated; it shows a login
+// form and the JS sends Basic credentials explicitly on every API request,
+// so we never rely on the browser's native auth prompt.
 
 const adminPage = `<!DOCTYPE html>
 <html lang="en">
@@ -41,23 +42,56 @@ const adminPage = `<!DOCTYPE html>
   .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; background: #1f6feb33; color: #58a6ff; }
   .badge.stale { background: #da363333; color: #ff7b72; }
   .empty { color: #8b949e; font-size: 0.9rem; }
+  #login { display: none; max-width: 380px; margin: 60px auto; background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 28px; }
+  #login h2 { margin-top: 0; font-size: 1.1rem; }
+  #login label { display: block; margin: 12px 0 4px; color: #8b949e; font-size: 0.85rem; }
+  #login input { width: 100%; margin-top: 4px; }
+  #login button { width: 100%; margin-top: 18px; }
+  #login .hint { color: #8b949e; font-size: 0.8rem; margin-top: 12px; }
+  #logout { margin-left: auto; }
 </style>
 </head>
 <body>
-<h1>Registry Admin</h1>
-<p class="subtitle">serverless-registry · <span id="host"></span></p>
-<div id="status"></div>
-<div class="actions">
-  <button onclick="refreshAll()">Refresh</button>
-  <span class="muted">|</span>
-  <label class="muted" style="font-size:0.85rem">Prune repos idle &gt;</label>
-  <input id="days" type="number" value="90" min="1" style="width:70px">
-  <select id="repo-select" style="min-width:200px"></select>
-  <button class="danger" onclick="prune()">Prune stale</button>
+<div id="login">
+  <h2>Registry Admin Login</h2>
+  <label>Username</label>
+  <input id="login-user" autocomplete="username" autofocus>
+  <label>Password</label>
+  <input id="login-pass" type="password" autocomplete="current-password">
+  <button class="primary" onclick="doLogin()">Sign in</button>
+  <div class="hint" id="login-hint"></div>
 </div>
-<div id="content"><p class="muted">Loading...</p></div>
+<div id="app" style="display:none">
+  <h1>Registry Admin</h1>
+  <p class="subtitle">serverless-registry · <span id="host"></span></p>
+  <div id="status"></div>
+  <div class="actions">
+    <button onclick="refreshAll()">Refresh</button>
+    <button id="logout" onclick="logout()">Log out</button>
+    <span class="muted">|</span>
+    <label class="muted" style="font-size:0.85rem">Prune repos idle &gt;</label>
+    <input id="days" type="number" value="90" min="1" style="width:70px">
+    <select id="repo-select" style="min-width:200px"></select>
+    <button class="danger" onclick="prune()">Prune stale</button>
+  </div>
+  <div id="content"><p class="muted">Loading...</p></div>
+</div>
 <script>
 const $ = (id) => document.getElementById(id);
+const AUTH_KEY = "registry_admin_auth";
+let authHeader = localStorage.getItem(AUTH_KEY) || null;
+
+function showLogin(msg) {
+  $("login").style.display = "block";
+  $("app").style.display = "none";
+  $("login-hint").textContent = msg || "";
+  $("login-user").focus();
+}
+function showApp() {
+  $("login").style.display = "none";
+  $("app").style.display = "block";
+  refreshAll();
+}
 const show = (msg, ok = true) => {
   const s = $("status");
   s.textContent = msg;
@@ -65,13 +99,43 @@ const show = (msg, ok = true) => {
   setTimeout(() => { s.style.display = "none"; }, 6000);
 };
 async function api(url, opts) {
-  const res = await fetch(url, opts);
+  const res = await fetch(url, {
+    ...opts,
+    headers: { ...(opts?.headers || {}), ...(authHeader ? { Authorization: authHeader } : {}) },
+  });
+  if (res.status === 401) {
+    authHeader = null;
+    localStorage.removeItem(AUTH_KEY);
+    showLogin("Session expired or invalid credentials, please sign in again.");
+    throw new Error("unauthorized");
+  }
   if (!res.ok) {
     let text = "";
     try { text = (await res.json()).error || ""; } catch {}
     throw new Error("HTTP " + res.status + (text ? ": " + text : ""));
   }
   return res.json();
+}
+async function doLogin() {
+  const user = $("login-user").value.trim();
+  const pass = $("login-pass").value;
+  if (!user || !pass) { $("login-hint").textContent = "Enter username and password"; return; }
+  authHeader = "Basic " + btoa(user + ":" + pass);
+  try {
+    await api("/v2/_catalog?n=1");
+    localStorage.setItem(AUTH_KEY, authHeader);
+    $("login-pass").value = "";
+    showApp();
+  } catch (e) {
+    if (e.message !== "unauthorized") {
+      showLogin("Could not reach the registry API: " + e.message);
+    }
+  }
+}
+function logout() {
+  authHeader = null;
+  localStorage.removeItem(AUTH_KEY);
+  showLogin("Signed out.");
 }
 const fmtTime = (ms) => ms ? new Date(ms).toLocaleString() : "never";
 const fmtDur = (ms) => {
@@ -159,6 +223,7 @@ async function refreshAll() {
 
     content.innerHTML = html;
   } catch (e) {
+    if (e.message === "unauthorized") return;
     content.innerHTML = "";
     show("Failed: " + e.message, false);
   }
@@ -177,7 +242,9 @@ async function prune() {
   }
 }
 $("host").textContent = location.host;
-refreshAll();
+$("login-pass").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
+$("login-user").addEventListener("keydown", (e) => { if (e.key === "Enter") $("login-pass").focus(); });
+if (authHeader) showApp(); else showLogin();
 </script>
 </body>
 </html>`;

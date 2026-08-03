@@ -47,19 +47,26 @@ router.all("*", () => new Response("Not Found.", { status: 404 }));
 export default {
   async fetch(request: Request, env: Env, context?: ExecutionContext) {
     if (!ensureConfig(env)) {
-      return new AuthErrorResponse(request);
+      return new AuthErrorResponse();
+    }
+
+    // The admin dashboard is served unauthenticated: it embeds a login form
+    // and the page JS sends credentials explicitly on every API request.
+    const url = new URL(request.url);
+    if (url.pathname === "/admin") {
+      return adminHandler();
     }
 
     const authMethod = await authenticationMethodFromEnv(env);
     if (!authMethod) {
-      return new AuthErrorResponse(request);
+      return new AuthErrorResponse();
     }
 
     const credentials = await authMethod.checkCredentials(request);
     if (!credentials.verified) {
       if (!isAnonymousPullAllowed(env, request)) {
         console.warn(`Not Authorized. authmode=${authMethod.authmode}. verified=false`);
-        return new AuthErrorResponse(request);
+        return new AuthErrorResponse();
       }
     }
 

@@ -1,7 +1,7 @@
 import { State } from "./registry/r2";
 
 export class AuthErrorResponse extends Response {
-  constructor(r: Request) {
+  constructor() {
     const jsonBody = JSON.stringify({
       errors: [
         {
