@@ -24,6 +24,8 @@ export interface Env {
   PUSH_COMPATIBILITY_MODE?: PushCompatibilityMode;
   REGISTRIES_JSON?: string; // should be in the format of RegistryConfiguration[];
   REGISTRY_CLIENT: Registry;
+  // Set to "true" to allow anonymous pull requests (GET/HEAD) without credentials.
+  ALLOW_ANONYMOUS_PULL?: string;
 }
 
 const router = Router();
@@ -48,8 +50,10 @@ export default {
 
     const credentials = await authMethod.checkCredentials(request);
     if (!credentials.verified) {
-      console.warn(`Not Authorized. authmode=${authMethod.authmode}. verified=false`);
-      return new AuthErrorResponse(request);
+      if (!isAnonymousPullAllowed(env, request)) {
+        console.warn(`Not Authorized. authmode=${authMethod.authmode}. verified=false`);
+        return new AuthErrorResponse(request);
+      }
     }
 
     env.REGISTRY_CLIENT = new R2Registry(env);
@@ -91,3 +95,33 @@ const ensureConfig = (env: Env): boolean => {
 
   return true;
 };
+
+// Allow anonymous pull requests (GET/HEAD) when ALLOW_ANONYMOUS_PULL is set to "true".
+// Write operations (POST/PUT/PATCH/DELETE) still require credentials.
+function isAnonymousPullAllowed(env: Env, request: Request): boolean {
+  if (env.ALLOW_ANONYMOUS_PULL !== "true") {
+    return false;
+  }
+
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return false;
+  }
+
+  const url = new URL(request.url);
+  const path = url.pathname;
+
+  // Version check
+  if (path === "/v2" || path === "/v2/") {
+    return true;
+  }
+
+  // Pull endpoints
+  if (path.includes("/blobs/uploads/")) {
+    return false;
+  }
+  if (path.includes("/manifests/") || path.includes("/blobs/") || path.includes("/tags/list")) {
+    return true;
+  }
+
+  return false;
+}

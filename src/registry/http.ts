@@ -328,76 +328,87 @@ export class RegistryHTTPClient implements Registry {
   }
 
   async authenticateBearer(ctx: AuthContext): Promise<HTTPContext> {
-    const params = new URLSearchParams({
-      service: ctx.service,
-      // explicitely include that we don't want an offline_token.
-      scope: `repository:${ctx.scope}:pull,push`,
-      client_id: "r2registry",
-      grant_type: this.configuration.username === undefined ? "none" : "password",
-      password: this.configuration.username === undefined ? "" : this.password(),
-    });
-    let response = await fetch(ctx.realm, {
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "Docker-Client/24.0.5 (linux)",
-      },
-      method: "POST",
-      body: params.toString(),
-    });
-    if (response.status === 404 || response.status === 405 || response.status == 401) {
-      console.debug(
-        this.url.toString(),
-        "Oauth 404/401/405... Falling back to simple token authentication, see https://distribution.github.io/distribution/spec/auth/token",
-      );
-      const responseSimple = await this.authenticateBearerSimple(ctx, params);
-      if (responseSimple.ok) {
-        response = responseSimple;
-      } else {
-        console.error(`Oauth fallback also failed: ${responseSimple.status} ${await responseSimple.text()}`);
-      }
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        `unexpected ${response.status} from ${this.url.toString()} when Oauth authenticating: ${await response.text()}`,
-      );
-    }
-
-    const t = await response.text();
-    try {
-      const response: {
-        access_token?: string;
-        expires_in: number;
-        repository: string;
-        token?: string;
-      } = JSON.parse(t);
-      console.debug(
-        `Authenticated with registry ${this.url.toString()} successfully, got token that expires in ${
-          response.expires_in
-        } seconds`,
-      );
-
-      if (!response.access_token && !response.token) {
-        console.error(
-          "Oauth response doesn't have access_token field, doing fallback to password_env, however this might mean that we will 401 later",
+    // Some registries (e.g. DockerHub) reject tokens that request more scopes than
+    // the credential has been granted (e.g. a read-only PAT with a "pull,push" scope).
+    // Try with full scopes first, then fall back to pull-only.
+    const scopes = [`repository:${ctx.scope}:pull,push`, `repository:${ctx.scope}:pull`];
+    for (const scope of scopes) {
+      const params = new URLSearchParams({
+        service: ctx.service,
+        // explicitely include that we don't want an offline_token.
+        scope,
+        client_id: "r2registry",
+        grant_type: this.configuration.username === undefined ? "none" : "password",
+        password: this.configuration.username === undefined ? "" : this.password(),
+      });
+      let response = await fetch(ctx.realm, {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "Docker-Client/24.0.5 (linux)",
+        },
+        method: "POST",
+        body: params.toString(),
+      });
+      if (response.status === 404 || response.status === 405 || response.status == 401) {
+        console.debug(
+          this.url.toString(),
+          "Oauth 404/401/405... Falling back to simple token authentication, see https://distribution.github.io/distribution/spec/auth/token",
         );
+        const responseSimple = await this.authenticateBearerSimple(ctx, params);
+        if (responseSimple.ok) {
+          response = responseSimple;
+        } else {
+          console.error(`Oauth fallback also failed: ${responseSimple.status} ${await responseSimple.text()}`);
+        }
       }
 
-      return {
-        authContext: ctx,
-        repository: response.repository ?? this.url.pathname,
-        accessToken: response.access_token ?? response.token ?? this.authBase64(),
-      };
-    } catch (err) {
-      console.error(
-        "Doing json response in authentication: ",
-        errorString(err),
-        t.slice(0, Math.min(t.length, 100)),
-        "status",
-        response.status,
-      );
-      throw err;
+      if (!response.ok) {
+        console.debug(
+          `Authentication failed with scope "${scope}" (${response.status} ${await response.text()}), trying next scope`,
+        );
+        continue;
+      }
+
+      const t = await response.text();
+      try {
+        const response: {
+          access_token?: string;
+          expires_in: number;
+          repository: string;
+          token?: string;
+        } = JSON.parse(t);
+        console.debug(
+          `Authenticated with registry ${this.url.toString()} successfully, got token that expires in ${
+            response.expires_in
+          } seconds`,
+        );
+
+        if (!response.access_token && !response.token) {
+          console.error(
+            "Oauth response doesn't have access_token field, doing fallback to password_env, however this might mean that we will 401 later",
+          );
+        }
+
+        return {
+          authContext: ctx,
+          repository: response.repository ?? this.url.pathname,
+          accessToken: response.access_token ?? response.token ?? this.authBase64(),
+        };
+      } catch (err) {
+        console.error(
+          "Doing json response in authentication: ",
+          errorString(err),
+          t.slice(0, Math.min(t.length, 100)),
+          "status",
+          response.status,
+        );
+        throw err;
+      }
     }
+
+    throw new Error(
+      `unexpected error from ${this.url.toString()} when Oauth authenticating: all scopes failed`,
+    );
   }
 
   async authenticateBasic(ctx: AuthContext): Promise<HTTPContext> {

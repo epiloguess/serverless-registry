@@ -203,6 +203,61 @@ describe("v2", () => {
     );
     expect(resAuthCorrect.ok).toBeTruthy();
   });
+
+  test("Anonymous pull is rejected when ALLOW_ANONYMOUS_PULL is not set", async () => {
+    const bindings = env as Env;
+    const previous = bindings.ALLOW_ANONYMOUS_PULL;
+    bindings.ALLOW_ANONYMOUS_PULL = undefined;
+    try {
+      const res = await fetchUnauth(createRequest("GET", `/v2/`, null));
+      expect(res.status).toBe(401);
+    } finally {
+      bindings.ALLOW_ANONYMOUS_PULL = previous;
+    }
+  });
+
+  test("Anonymous pull is allowed when ALLOW_ANONYMOUS_PULL is true", async () => {
+    const bindings = env as Env;
+    const previous = bindings.ALLOW_ANONYMOUS_PULL;
+    bindings.ALLOW_ANONYMOUS_PULL = "true";
+    try {
+      const res = await fetchUnauth(createRequest("GET", `/v2/`, null));
+      expect(res.status).toBe(200);
+    } finally {
+      bindings.ALLOW_ANONYMOUS_PULL = previous;
+    }
+  });
+
+  test("Anonymous push is still rejected when ALLOW_ANONYMOUS_PULL is true", async () => {
+    const bindings = env as Env;
+    const previous = bindings.ALLOW_ANONYMOUS_PULL;
+    bindings.ALLOW_ANONYMOUS_PULL = "true";
+    try {
+      const res = await fetchUnauth(createRequest("POST", `/v2/name/blobs/uploads/`, null));
+      expect(res.status).toBe(401);
+    } finally {
+      bindings.ALLOW_ANONYMOUS_PULL = previous;
+    }
+  });
+
+  test("Anonymous pull of manifest is allowed when ALLOW_ANONYMOUS_PULL is true", async () => {
+    const bindings = env as Env;
+    const previous = bindings.ALLOW_ANONYMOUS_PULL;
+    bindings.ALLOW_ANONYMOUS_PULL = "true";
+    const name = "anonymous-pull-manifest";
+    try {
+      const manifest = await generateManifest(name);
+      await createManifest(name, manifest, "latest");
+      const res = await fetchUnauth(
+        createRequest("GET", `/v2/${name}/manifests/latest`, null, {
+          Accept: "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json",
+        }),
+      );
+      expect(res.status).toBe(200);
+    } finally {
+      bindings.ALLOW_ANONYMOUS_PULL = previous;
+    }
+  });
 });
 
 function getImageManifestV2(schema: ManifestSchema) {
