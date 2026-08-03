@@ -15,7 +15,10 @@ export class AuthErrorResponse extends Response {
       status: 401,
       headers: {
         "content-type": "application/json;charset=UTF-8",
-        "WWW-Authenticate": `Basic realm="${r.url}"`,
+        // A fixed realm lets browsers cache credentials across all requests on
+        // the same origin. Using r.url here would make every request carry a
+        // different realm, so the browser would keep re-prompting for login.
+        "WWW-Authenticate": `Basic realm="r2-registry"`,
       },
     };
     super(jsonBody, init);
