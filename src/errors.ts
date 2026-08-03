@@ -1,7 +1,9 @@
 import { State } from "./registry/r2";
 
+const browserUserAgentPattern = /(mozilla|chrome|safari|firefox|edge|opera)/i;
+
 export class AuthErrorResponse extends Response {
-  constructor() {
+  constructor(r: Request) {
     const jsonBody = JSON.stringify({
       errors: [
         {
@@ -11,15 +13,22 @@ export class AuthErrorResponse extends Response {
         },
       ],
     });
+    const headers: Record<string, string> = {
+      "content-type": "application/json;charset=UTF-8",
+      // Never let proxies cache 401 responses: a cached challenge with an old
+      // realm makes browsers re-prompt for login in a loop.
+      "Cache-Control": "no-store",
+    };
+    // Only send a WWW-Authenticate challenge to non-browser clients (e.g. the
+    // docker CLI). Browsers interpret it as a native login prompt, which we
+    // deliberately avoid: the admin dashboard handles login in-page.
+    const userAgent = r.headers.get("User-Agent") ?? "";
+    if (!browserUserAgentPattern.test(userAgent)) {
+      headers["WWW-Authenticate"] = `Basic realm="r2-registry"`;
+    }
     const init = {
       status: 401,
-      headers: {
-        "content-type": "application/json;charset=UTF-8",
-        // A fixed realm lets browsers cache credentials across all requests on
-        // the same origin. Using r.url here would make every request carry a
-        // different realm, so the browser would keep re-prompting for login.
-        "WWW-Authenticate": `Basic realm="r2-registry"`,
-      },
+      headers,
     };
     super(jsonBody, init);
   }

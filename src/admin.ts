@@ -251,6 +251,11 @@ if (authHeader) showApp(); else showLogin();
 
 export function adminHandler(): Response {
   return new Response(adminPage, {
-    headers: { "Content-Type": "text/html; charset=utf-8" },
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      // Prevent proxies from caching an older version of the page that used
+      // the native auth prompt.
+      "Cache-Control": "no-store",
+    },
   });
 }
